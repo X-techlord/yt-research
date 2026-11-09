@@ -47,7 +47,7 @@ Open the ZIP file, then extract it ("extract" means "take the folder out of the 
 Option 2: If you know Git (a program that downloads code projects), run:
 
 ```bash
-git clone https://github.com/ernestzman1-max/yt-research.git
+git clone https://github.com/X-techlord/yt-research.git
 ```
 
 ### Step 2 - Open the black window in the tool folder
