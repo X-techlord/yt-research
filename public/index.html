@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>YT Research</title>
+<style>
+  :root{--bg:#0f1115;--card:#181b22;--line:#2a2f3a;--text:#e8eaf0;--mute:#8b93a7;--acc:#5b8cff;--good:#3ecf8e;--warn:#f5b84b;--bad:#ef6b6b}
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,Segoe UI,sans-serif}
+  header{padding:16px 24px;border-bottom:1px solid var(--line);display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+  h1{font-size:18px;margin:0} .quota{margin-left:auto;color:var(--mute)}
+  main{display:grid;grid-template-columns:minmax(320px,420px) 1fr;gap:16px;padding:16px 24px}
+  @media(max-width:900px){main{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
+  input,button{font:inherit;border-radius:8px;border:1px solid var(--line);background:#0f1218;color:var(--text);padding:8px 10px}
+  button{cursor:pointer;background:var(--acc);border-color:var(--acc);color:#fff} button.ghost{background:transparent;color:var(--text);border-color:var(--line)}
+  button:disabled{opacity:.5;cursor:default}
+  .row{display:flex;gap:8px;margin-bottom:10px} .row input{flex:1}
+  table{width:100%;border-collapse:collapse} th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left}
+  th{color:var(--mute);font-weight:500;cursor:pointer;user-select:none} tr.k:hover{background:#1e222b;cursor:pointer}
+  .pill{display:inline-block;min-width:34px;text-align:center;border-radius:6px;padding:1px 6px;font-weight:600}
+  .good{background:#12352a;color:var(--good)} .mid{background:#3a2f12;color:var(--warn)} .low{background:#3a1a1a;color:var(--bad)}
+  .mute{color:var(--mute)} .scroll{max-height:70vh;overflow:auto}
+  .vid{display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)} .vid img{width:120px;height:68px;object-fit:cover;border-radius:6px}
+  a{color:var(--acc);text-decoration:none} .tags span{display:inline-block;background:#0f1218;border:1px solid var(--line);border-radius:12px;padding:1px 8px;margin:2px}
+  h3{margin:14px 0 6px;font-size:14px} .err{color:var(--bad)} .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:8px 0}
+  .stat{background:#0f1218;border:1px solid var(--line);border-radius:8px;padding:8px;text-align:center} .stat b{font-size:20px;display:block}
+</style>
+</head>
+<body>
+<header>
+  <h1>YT Research</h1>
+  <span class="mute">keyword + title research for any niche</span>
+  <span class="quota" id="quota"></span>
+</header>
+<main>
+  <section class="card">
+    <div class="row">
+      <input id="seed" placeholder="Niche or seed keyword, e.g. woodworking" autofocus>
+      <button id="go">Expand</button>
+    </div>
+    <div class="row">
+      <button class="ghost" id="batch" disabled>Analyze top 8 unanalyzed</button>
+      <button class="ghost" id="trendsBtn" disabled title="Google Trends (YouTube Search): free, no quota">Add search interest</button>
+      <label class="mute" style="align-self:center" title="Hides videos of 3 minutes or less (YouTube Shorts) from the analysis"><input type="checkbox" id="longform" checked style="padding:0"> Long-form only</label>
+    </div>
+    <div class="row"><span class="mute" id="status"></span></div>
+    <div class="scroll">
+      <table><thead><tr>
+        <th data-s="keyword">Keyword</th><th data-s="interest" title="Google Trends YouTube-search interest, 12 months, as % of the seed keyword (100 = same as seed). Arrow = last 13 weeks vs the 13 before.">I</th><th data-s="demand" title="Demand">D</th><th data-s="saturation" title="Saturation (lower is better)">S</th><th data-s="opportunity" title="Opportunity">O</th>
+      </tr></thead><tbody id="kws"></tbody></table>
+    </div>
+    <p class="mute" style="font-size:12px">Analyzing one keyword costs ~102 API units (a search is 100). Results are cached 12h. Scores are relative estimates from public data, not real search volume.</p>
+  </section>
+  <section class="card" id="detail"><span class="mute">Expand a seed, then click a keyword to analyze it.</span></section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let rows = []; // {keyword, autocompleteScore, result?}
+let sortKey = 'autocompleteScore', sortDir = -1;
+try { rows = JSON.parse(localStorage.getItem('rows') || '[]'); } catch {}
+
+const cls = (v, inv) => { const x = inv ? 100 - v : v; return x >= 55 ? 'good' : x >= 30 ? 'mid' : 'low'; };
+const pill = (v, inv) => v == null ? '<span class="mute">–</span>' : `<span class="pill ${cls(v, inv)}">${v}</span>`;
+const fmt = (n) => n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'K' : String(n ?? '–');
+const save = () => { try { localStorage.setItem('rows', JSON.stringify(rows.map(({keyword, autocompleteScore, result, seed, trends}) => ({keyword, autocompleteScore, result, seed, trends})))); } catch {} };
+const trendCell = (t) => {
+  if (!t || t.interest == null) return '<span class="mute">–</span>';
+  const c = t.interest >= 50 ? 'good' : t.interest >= 15 ? 'mid' : 'low';
+  const arrow = t.trend === 'rising' ? ' <span style="color:var(--good)">▲</span>' : t.trend === 'falling' ? ' <span style="color:var(--bad)">▼</span>' : '';
+  return `<span class="pill ${c}">${t.interest}</span>${arrow}`;
+};
+
+async function api(path) {
+  const r = await fetch(path); const j = await r.json();
+  if (!r.ok) throw new Error(j.error || 'request failed'); return j;
+}
+async function refreshStatus() {
+  const s = await api('/api/status');
+  $('quota').textContent = s.hasKey ? `Quota today: ${s.quotaUsed} / ${s.quotaBudget}` : 'No YT_API_KEY in .env — run: node setup-key.mjs (expansion + Trends still work)';
+}
+
+function render() {
+  const get = (r) => sortKey === 'keyword' ? r.keyword : sortKey === 'autocompleteScore' ? r.autocompleteScore : sortKey === 'interest' ? (r.trends?.interest ?? -1) : (r.result ? r.result[sortKey] : -1);
+  const sorted = [...rows].sort((a, b) => { const x = get(a), y = get(b); return (x > y ? 1 : x < y ? -1 : 0) * sortDir; });
+  $('kws').innerHTML = sorted.map((r) => `<tr class="k" data-k="${esc(r.keyword)}"><td>${esc(r.keyword)}</td><td>${trendCell(r.trends)}</td><td>${pill(r.result?.demand)}</td><td>${pill(r.result?.saturation, true)}</td><td>${pill(r.result?.opportunity)}</td></tr>`).join('');
+  $('batch').disabled = !rows.some((r) => !fresh(r));
+  $('trendsBtn').disabled = !rows.some((r) => !r.trends);
+}
+
+const wantLong = () => $('longform').checked;
+try { $('longform').checked = localStorage.getItem('longform') !== '0'; } catch {}
+$('longform').onchange = () => { try { localStorage.setItem('longform', wantLong() ? '1' : '0'); } catch {} render(); };
+// A stored result only counts if it was made with the same long-form setting (re-running is free: server caches the search).
+const fresh = (r) => r.result && r.result.longform === wantLong();
+
+async function analyzeOne(kw) {
+  const row = rows.find((r) => r.keyword === kw);
+  if (fresh(row)) return show(row);
+  $('status').textContent = `Analyzing "${kw}"…`;
+  try { row.result = await api('/api/analyze?keyword=' + encodeURIComponent(kw) + '&longform=' + (wantLong() ? 1 : 0)); save(); render(); show(row); refreshStatus(); $('status').textContent = ''; }
+  catch (e) { $('status').innerHTML = `<span class="err">${esc(e.message)}</span>`; throw e; }
+}
+
+function show(row) {
+  const r = row.result, p = r.patterns;
+  $('detail').innerHTML = `
+    <h2 style="margin:0 0 4px">${esc(r.keyword)}</h2>
+    <div class="mute">Analyzed ${r.analyzed} ${r.longform ? 'long-form videos' : 'videos (Shorts included)'}${r.longform ? ` · ${r.shortsHidden} Shorts hidden` : ''}${r.analyzed < 8 ? ' · <span class="err">few results, scores are shaky</span>' : ''}</div>
+    <div class="grid">
+      <div class="stat"><b>${pill(r.demand)}</b>Demand<br><span class="mute">${fmt(r.medianViewsPerDay)} views/day median</span></div>
+      <div class="stat"><b>${pill(r.saturation, true)}</b>Saturation<br><span class="mute">${r.bigChannelShare}% big channels</span></div>
+      <div class="stat"><b>${pill(r.opportunity)}</b>Opportunity<br><span class="mute">${r.smallChannelWinners} small-channel winners</span></div>
+      <div class="stat"><b>${fmt(r.totalResults)}</b>Results<br><span class="mute">YouTube's estimate</span></div>
+    </div>
+    ${row.trends && row.trends.interest != null ? `<div style="margin-top:6px">Search interest (Google Trends, YouTube Search, 12 mo): <b>${row.trends.interest}%</b> of "${esc(row.seed || '')}" · ${row.trends.trend} (${row.trends.growthPct >= 0 ? '+' : ''}${row.trends.growthPct}% last 13 weeks)</div>` : ''}
+    <h3>Title patterns in top results</h3>
+    <div class="mute">Avg length ${p.avgTitleLength} chars · ${p.pctWithNumber}% have a number · ${p.pctWithBrackets}% brackets · ${p.pctQuestion}% questions · ${p.pctAllCapsWord}% ALL-CAPS word</div>
+    <div class="tags">${p.topWords.map((w) => `<span>${esc(w.word)} ×${w.count}</span>`).join('')}</div>
+    ${r.outliers.length ? `<h3>Outliers (views ≥ 3× their channel's average)</h3>${r.outliers.map(vid).join('')}` : ''}
+    <h3>Top videos by views/day</h3>${r.topVideos.map(vid).join('')}`;
+}
+const vid = (v) => `<div class="vid"><img src="${esc(v.thumb)}" alt=""><div><a href="https://youtu.be/${esc(v.id)}" target="_blank" rel="noopener">${esc(v.title)}</a><br><span class="mute">${esc(v.channelTitle)} · ${v.subs == null ? 'hidden' : fmt(v.subs)} subs · ${fmt(v.views)} views · ${fmt(v.viewsPerDay)}/day · ${v.ageDays}d old${v.outlierRatio ? ' · ' + v.outlierRatio + '× channel avg' : ''}</span></div></div>`;
+
+$('go').onclick = async () => {
+  const seed = $('seed').value.trim(); if (!seed) return;
+  $('go').disabled = true; $('status').textContent = 'Expanding via autocomplete (~15s)…';
+  try {
+    const { keywords } = await api('/api/expand?seed=' + encodeURIComponent(seed));
+    const old = new Map(rows.map((r) => [r.keyword, r]));
+    rows = keywords.map((k) => { const o = old.get(k.keyword); return o ? { ...o, autocompleteScore: k.autocompleteScore, seed, trends: o.seed === seed ? o.trends : undefined } : { ...k, seed }; });
+    sortKey = 'autocompleteScore'; sortDir = -1; save(); render(); $('status').textContent = `${rows.length} keywords`;
+  } catch (e) { $('status').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  $('go').disabled = false;
+};
+$('seed').addEventListener('keydown', (e) => e.key === 'Enter' && $('go').click());
+$('kws').onclick = (e) => { const tr = e.target.closest('tr.k'); if (tr) analyzeOne(tr.dataset.k).catch(() => {}); };
+document.querySelector('thead').onclick = (e) => {
+  const k = e.target.dataset.s; if (!k) return;
+  sortDir = sortKey === k ? -sortDir : -1; sortKey = k; render();
+};
+$('trendsBtn').onclick = async () => {
+  $('trendsBtn').disabled = true;
+  const anchor = $('seed').value.trim() || rows[0]?.seed;
+  const todo = [...rows].sort((a, b) => b.autocompleteScore - a.autocompleteScore).filter((r) => !r.trends && (!r.seed || r.seed === anchor || !anchor)).slice(0, 16);
+  if (!anchor || !todo.length) { $('status').textContent = 'Type the seed keyword first (it is the comparison anchor).'; return render(); }
+  $('status').textContent = `Google Trends: ${todo.length} keywords vs "${anchor}" (~${Math.ceil(todo.length / 4) * 4}s)…`;
+  try {
+    const { results } = await api('/api/trends?anchor=' + encodeURIComponent(anchor) + '&' + todo.map((r) => 'k=' + encodeURIComponent(r.keyword)).join('&'));
+    for (const r of todo) if (results[r.keyword]) { r.trends = results[r.keyword]; r.seed = anchor; }
+    save(); $('status').textContent = '';
+  } catch (e) { $('status').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  render();
+};
+$('batch').onclick = async () => {
+  $('batch').disabled = true;
+  const todo = [...rows].sort((a, b) => b.autocompleteScore - a.autocompleteScore).filter((r) => !fresh(r)).slice(0, 8);
+  for (const r of todo) { try { await analyzeOne(r.keyword); } catch { break; } }
+  render();
+};
+refreshStatus(); render();
+</script>
+</body>
+</html>
